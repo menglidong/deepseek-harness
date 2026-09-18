@@ -43,14 +43,19 @@ jobs:
           node-version: ${{ env.PRIMARY_NODE_VERSION }}
           package-manager-cache: false
 
+      # pwsh (not bash): a bash step puts Git-for-Windows' usr\bin first on PATH,
+      # which shadows the native System32 bsdtar with MSYS GNU tar. The release
+      # scripts call `tar -tzf/-xOzf <absolute windows path>`, and MSYS tar
+      # misparses the drive letter as a remote host ("Cannot connect to D").
       - name: Configure pnpm store path
         id: pnpm-store
-        shell: bash
+        shell: pwsh
         run: |
-          store_root="$HOME/.local/share/pnpm/store"
-          echo "PNPM_CONFIG_STORE_DIR=$store_root" >> "$GITHUB_ENV"
-          store_path=$(PNPM_CONFIG_STORE_DIR="$store_root" pnpm store path --silent)
-          echo "path=$store_path" >> "$GITHUB_OUTPUT"
+          $storeRoot = Join-Path $env:USERPROFILE '.local\share\pnpm\store'
+          $env:PNPM_CONFIG_STORE_DIR = $storeRoot
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "PNPM_CONFIG_STORE_DIR=$storeRoot"
+          $storePath = @((& pnpm store path --silent 2>$null) | Where-Object { $_ -ne '' } | Select-Object -Last 1).Trim()
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "path=$storePath"
 
       - uses: actions/cache/restore@v4
         with:
@@ -60,7 +65,7 @@ jobs:
             windows-latest-node-${{ env.PRIMARY_NODE_VERSION }}-pnpm-
 
       - name: Install (immutable)
-        shell: bash
+        shell: pwsh
         run: pnpm install --frozen-lockfile
 
       # The packaging script reads release settings from this local file and
@@ -78,7 +83,7 @@ jobs:
           Set-Content -LiteralPath 'apps/desktop/.env.windows' -Value $settings -Encoding utf8
 
       - name: Package unsigned Windows installer
-        shell: bash
+        shell: pwsh
         run: pnpm run package:desktop:win:x64:unsigned
 
       - name: Show artifacts
