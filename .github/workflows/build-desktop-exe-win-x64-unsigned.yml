@@ -1,0 +1,96 @@
+# Build the unsigned Windows x64 desktop installer (NSIS .exe) for local use.
+#
+# The desktop packaging script (apps/desktop/scripts/package-target.ts) refuses
+# to build win-x64 off a Windows x64 host, so no existing workflow produces this
+# artifact: release.yml/ci*.yml run on Linux for npm packing, and
+# ci-master.yml's "windows" job only runs Wine-based node tests. This workflow is
+# a manual, credential-free build: --unsigned packaging needs no signing
+# hardware and no secrets; the runner's Visual Studio C++ Build Tools compile
+# the native NSIS installer helper in beforeBuild.
+name: Build desktop exe (win-x64 unsigned)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PRIMARY_NODE_VERSION: '24'
+  DSH_TELEMETRY_DISABLED: '1'
+
+jobs:
+  build:
+    name: unsigned win-x64 NSIS installer
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          clean: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.PRIMARY_NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Configure pnpm store path
+        id: pnpm-store
+        shell: bash
+        run: |
+          store_root="$HOME/.local/share/pnpm/store"
+          echo "PNPM_CONFIG_STORE_DIR=$store_root" >> "$GITHUB_ENV"
+          store_path=$(PNPM_CONFIG_STORE_DIR="$store_root" pnpm store path --silent)
+          echo "path=$store_path" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: windows-latest-node-${{ env.PRIMARY_NODE_VERSION }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            windows-latest-node-${{ env.PRIMARY_NODE_VERSION }}-pnpm-
+
+      - name: Install (immutable)
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      # The packaging script reads release settings from this local file and
+      # never falls back to ambient values; unsigned packaging only needs the
+      # app id and the mandatory-update origins.
+      - name: Local unsigned release settings
+        shell: pwsh
+        run: |
+          $settings = @(
+            'DSH_DESKTOP_APP_ID=com.deepseek.harness',
+            'DSH_DESKTOP_AUTO_UPDATE_ENV=test',
+            'DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://harness-test.deepseek.com',
+            'DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN=https://harness.deepseek.com'
+          )
+          Set-Content -LiteralPath 'apps/desktop/.env.windows' -Value $settings -Encoding utf8
+
+      - name: Package unsigned Windows installer
+        shell: bash
+        run: pnpm run package:desktop:win:x64:unsigned
+
+      - name: Show artifacts
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse 'apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts' |
+            Sort-Object Length -Descending |
+            Format-Table Name, Length -AutoSize | Out-String -Width 4096
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deepseek-harness-windows-x64-unsigned
+          path: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/**/*
+          if-no-files-found: error
+          retention-days: 30
