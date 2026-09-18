@@ -71,12 +71,20 @@ jobs:
       # The packaging script reads release settings from this local file and
       # never falls back to ambient values; unsigned packaging only needs the
       # app id and the mandatory-update origins.
+      #
+      # DSH_DESKTOP_AUTO_UPDATE_ENV MUST be "production" for personal/fork
+      # builds: the "test" deployment bakes a mandatory-update policy with
+      # authentication "feishu-test" into app.asar, and on launch the shell
+      # opens a blocking modal ("登录测试环境") that blurs and freezes the
+      # main window until Feishu SSO succeeds — which a local unsigned build
+      # can never do. "production" is anonymous, and the prod policy endpoint
+      # returns 404 (no force) for unlisted bundles, so no dialog appears.
       - name: Local unsigned release settings
         shell: pwsh
         run: |
           $settings = @(
             'DSH_DESKTOP_APP_ID=com.deepseek.harness',
-            'DSH_DESKTOP_AUTO_UPDATE_ENV=test',
+            'DSH_DESKTOP_AUTO_UPDATE_ENV=production',
             'DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://harness-test.deepseek.com',
             'DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN=https://harness.deepseek.com'
           )
