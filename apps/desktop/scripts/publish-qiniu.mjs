@@ -15,7 +15,8 @@
  *
  * Usage: node publish-qiniu.mjs <unsigned-artifacts-dir> <node-modules-dir-with-qiniu>
  */
-import { createHash, createRequire } from 'node:crypto'
+import { createHash } from 'node:crypto'
+import { createRequire } from 'node:module'
 import { createReadStream } from 'node:fs'
 import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'

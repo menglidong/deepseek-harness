@@ -126,7 +126,7 @@ jobs:
           $work = Join-Path $env:RUNNER_TEMP 'qiniu-publisher'
           New-Item -ItemType Directory -Force $work | Out-Null
           Set-Location $work
-          npm install --no-audit --no-fund qiniu
+          npm install --no-audit --no-fund qiniu@7.15.2
           node (Join-Path $env:GITHUB_WORKSPACE 'apps\desktop\scripts\publish-qiniu.mjs') `
             (Join-Path $env:GITHUB_WORKSPACE 'apps\desktop\.desktop-build\targets\win-x64\unsigned-artifacts') `
             $work
