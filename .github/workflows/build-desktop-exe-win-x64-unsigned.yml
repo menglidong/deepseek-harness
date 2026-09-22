@@ -117,6 +117,8 @@ jobs:
           QINIU_SECRET_KEY: ${{ secrets.SECRET_KEY }}
           QINIU_BUCKET: ${{ secrets.BUCKET_NAME }}
           QINIU_CDN_HOST: ${{ secrets.CDN_HOST }}
+          # Qiniu answered "incorrect region, please use up-z2.qiniup.com" — the bucket lives in zone z2 (South China).
+          QINIU_ZONE: z2
         run: |
           $ErrorActionPreference = 'Stop'
           # Tolerate an accidental scheme prefix / trailing slash in the CDN_HOST secret.

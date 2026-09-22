@@ -48,7 +48,7 @@
 | `BUCKET_NAME` | Kodo 桶名，**必须公有读** |
 | `CDN_HOST` | 加速域名（如 `updates.example.com`），HTTPS 已启用。纯域名最佳；误带 `https://` 前缀或尾部斜杠会自动剥离；**不要带路径**（会被拒绝） |
 
-桶不在华东时，给 publish step 的 env 加 `QINIU_ZONE: z1|z2|na0`（默认 z0）。
+本桶在**华南（z2）**：publish step 已固定 `QINIU_ZONE: z2`（由 Qiniu "incorrect region, please use up-z2.qiniup.com" 报错确定）。迁移桶后如需改 zone，改这一行即可（可选值 z0|z1|z2|na0|as0）。
 
 ## 七牛对象布局
 
@@ -69,3 +69,5 @@
 - 2026-07-21：本地探针通过（feed origin 覆盖、policy anonymous、无覆盖时回归原域名、nightly.yml 合法 YAML、`createElectronBuilderConfig` 输出 publish 配置正确）。
 - 2026-09-22：首建 35752846884 在 Package step 失败——`.env.windows` 白名单拒绝 `DSH_DESKTOP_UNSIGNED_UPDATE_FEED`（漏了第 2 处补丁）。补白名单后本地探针（含负向 + 环境泄漏过滤）全绿。
 - 2026-09-22：二建 35754348542 在 policy origin 校验失败——`CDN_HOST` secret 值带 scheme/路径，拼出的不是纯 HTTPS origin。全链加归一化（workflow 两个 step + `scripts/qiniu-host.mjs`：自动剥离 scheme/尾斜杠，路径仍明确报错），归一化用例探针全绿。
+- 2026-09-22：三建 35755102344 打包通过（17 分钟），发布 step 死于 import 笔误（`createRequire` 属 `node:module`）；修后本地冒烟至上传边界全绿（假密钥被七牛 `401 bad token` 拒，证明链路通）。
+- 2026-09-22：四建 35757644091 打包通过，发布 step 上传 293MB 后报 `incorrect region, please use up-z2.qiniup.com`——桶在 z2（华南）。publish step 固定 `QINIU_ZONE: z2`。
