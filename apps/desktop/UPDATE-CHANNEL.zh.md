@@ -17,14 +17,15 @@
 - 策略门 `GET <CDN>/api/v0/check_client_update` 是七牛上的**静态 JSON**（`code:0` 无强更）；
   返回 200 而非 401，故 test 部署的飞书登录流永远不会触发（`authentication` 为 production 的 anonymous）。
 
-## 薄层内容（上游同步后须核对/恢复这 4 处）
+## 薄层内容（上游同步后须核对/恢复这 5 处）
 
 | # | 文件 | 内容 | 冲突恢复标记 |
 |---|------|------|--------------|
 | 1 | `scripts/electron-builder-config.mjs` | ~L76：`DSH_DESKTOP_UNSIGNED_UPDATE_FEED=1` 时 unsigned 构建烙入 feed | grep `DSH_DESKTOP_UNSIGNED_UPDATE_FEED` |
-| 2 | `scripts/desktop-auto-update-environment.mjs` | `resolveDesktopAutoUpdateConfig` 内 production origin 可被 `DOWNLOAD_PROD_ORIGIN` 覆盖 | grep `DOWNLOAD_PROD_ORIGIN` |
-| 3 | `.github/workflows/build-desktop-exe-win-x64-unsigned.yml` | settings 加 3 行（FEED=1 / 两个 origin 指向 `$CDN_HOST`）+ `Publish update feed to Qiniu` step | grep `publish-qiniu` |
-| 4 | `scripts/publish-qiniu.mjs` | 版本双校验 → sha512/size → 生成 nightly.yml → 上传 4 对象 → CDN refresh | fork 新增文件，上游不会删 |
+| 2 | `scripts/desktop-package-environment.mjs` | `.env.windows` 白名单 `SHARED_SETTING` / `AMBIENT_RELEASE_SETTING` 含 `UNSIGNED_UPDATE_FEED`（缺失会报 "unsupported setting"） | grep `UNSIGNED_UPDATE_FEED` |
+| 3 | `scripts/desktop-auto-update-environment.mjs` | `resolveDesktopAutoUpdateConfig` 内 production origin 可被 `DOWNLOAD_PROD_ORIGIN` 覆盖（白名单本就预置该变量名，补丁只是让代码读它） | grep `DOWNLOAD_PROD_ORIGIN` |
+| 4 | `.github/workflows/build-desktop-exe-win-x64-unsigned.yml` | settings 加 3 行（FEED=1 / 两个 origin 指向 `$CDN_HOST`）+ `Publish update feed to Qiniu` step | grep `publish-qiniu` |
+| 5 | `scripts/publish-qiniu.mjs` | 版本双校验 → sha512/size → 生成 nightly.yml → 上传 4 对象 → CDN refresh | fork 新增文件，上游不会删 |
 
 补丁 1/2 均为**加法式**小改（env 门控 + 可选覆盖），不改变上游默认行为：
 不设 `DSH_DESKTOP_UNSIGNED_UPDATE_FEED` 的构建行为与上游一致；
@@ -32,7 +33,7 @@
 
 ## 同步后核对清单
 
-1. 上表 3 个 grep 标记仍在；缺失即按标记处重新应用（补丁极小）。
+1. 上表 3 个 grep 标记仍在（`UNSIGNED_UPDATE_FEED` 同时覆盖表内 1、2 两文件）；缺失即按标记处重新应用（补丁极小）。
 2. 触发一次构建验证整链：
    - GH 的 `Publish update feed to Qiniu` step 成功；
    - `https://<CDN_HOST>/dsh-desk/feeds/win-x64/nightly.yml` 返回 200 且版本 = 构建版本；
@@ -65,4 +66,5 @@
 
 ## 验证记录
 
-- 2026-07-21：本地探针通过（feed origin 覆盖、policy anonymous、无覆盖时回归原域名、nightly.yml 合法 YAML、`createElectronBuilderConfig` 输出 publish 配置正确）；首次构建验证待上游合并新版本后进行。
+- 2026-07-21：本地探针通过（feed origin 覆盖、policy anonymous、无覆盖时回归原域名、nightly.yml 合法 YAML、`createElectronBuilderConfig` 输出 publish 配置正确）。
+- 2026-09-22：首建 35752846884 在 Package step 失败——`.env.windows` 白名单拒绝 `DSH_DESKTOP_UNSIGNED_UPDATE_FEED`（漏了第 2 处补丁）。补白名单后本地探针（含负向 + 环境泄漏过滤）全绿，重建中。
