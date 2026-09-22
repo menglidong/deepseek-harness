@@ -21,6 +21,7 @@ import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { normalizeQiniuCdnHost } from './qiniu-host.mjs'
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const appRoot = join(scriptDir, '..')
@@ -44,8 +45,8 @@ for (const name of ['QINIU_ACCESS_KEY', 'QINIU_SECRET_KEY', 'QINIU_BUCKET', 'QIN
 const accessKey = env.QINIU_ACCESS_KEY.trim()
 const secretKey = env.QINIU_SECRET_KEY.trim()
 const bucket = env.QINIU_BUCKET.trim()
-const host = env.QINIU_CDN_HOST.trim().replace(/\/+$/, '')
-if (!/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i.test(host)) fail(`QINIU_CDN_HOST must be a bare host name, got "${env.QINIU_CDN_HOST}"`)
+const host = normalizeQiniuCdnHost(env.QINIU_CDN_HOST)
+if (host === undefined) fail(`QINIU_CDN_HOST must be a bare host name (an https:// prefix and trailing slash are tolerated, a path is not), got "${env.QINIU_CDN_HOST}"`)
 const zoneName = (env.QINIU_ZONE?.trim() || 'z0').toLowerCase()
 const zoneConst = ZONES[zoneName]
 if (zoneConst === undefined) fail(`QINIU_ZONE must be one of ${Object.keys(ZONES).join(', ')}; got "${env.QINIU_ZONE}"`)

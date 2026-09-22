@@ -90,15 +90,21 @@ jobs:
         env:
           CDN_HOST: ${{ secrets.CDN_HOST }}
         run: |
+          # Tolerate an accidental scheme prefix / trailing slash in the CDN_HOST secret.
+          $cdn = $env:CDN_HOST.Trim()
+          while ($cdn -match '^[a-zA-Z][a-zA-Z0-9+.-]*://') { $cdn = ($cdn -replace '^[a-zA-Z][a-zA-Z0-9+.-]*://', '').Trim() }
+          $cdn = $cdn.TrimEnd('/').Trim()
           $settings = @(
             'DSH_DESKTOP_APP_ID=com.deepseek.harness',
             'DSH_DESKTOP_AUTO_UPDATE_ENV=production',
             'DSH_DESKTOP_UNSIGNED_UPDATE_FEED=1',
-            "DOWNLOAD_PROD_ORIGIN=https://${env:CDN_HOST}",
+            "DOWNLOAD_PROD_ORIGIN=https://${cdn}",
             'DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://harness-test.deepseek.com',
-            "DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN=https://${env:CDN_HOST}"
+            "DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN=https://${cdn}"
           )
           Set-Content -LiteralPath 'apps/desktop/.env.windows' -Value $settings -Encoding utf8
+          Write-Host '--- .env.windows (contains origins only, no secrets) ---'
+          Get-Content 'apps/desktop/.env.windows'
 
       - name: Package unsigned Windows installer
         shell: pwsh
@@ -113,6 +119,10 @@ jobs:
           QINIU_CDN_HOST: ${{ secrets.CDN_HOST }}
         run: |
           $ErrorActionPreference = 'Stop'
+          # Tolerate an accidental scheme prefix / trailing slash in the CDN_HOST secret.
+          $cdn = $env:QINIU_CDN_HOST.Trim()
+          while ($cdn -match '^[a-zA-Z][a-zA-Z0-9+.-]*://') { $cdn = ($cdn -replace '^[a-zA-Z][a-zA-Z0-9+.-]*://', '').Trim() }
+          $env:QINIU_CDN_HOST = $cdn.TrimEnd('/').Trim()
           $work = Join-Path $env:RUNNER_TEMP 'qiniu-publisher'
           New-Item -ItemType Directory -Force $work | Out-Null
           Set-Location $work
