@@ -1,0 +1,68 @@
+# Fork 轻量打包层 · Windows 更新通道
+
+> 定位：本 fork 不改产品代码，只在上游之上做「构建 + 分发」薄层。
+> 版本不手动 bump——上游合并进什么版本，构建就发布什么版本；
+> 各机器应用内的「检查更新」在下次上游发版后自然可用。
+
+## 更新链路
+
+```
+上游合并新版本 → GH Actions 构建（unsigned NSIS）
+  → publish-qiniu.mjs 发布 4 个对象到七牛 CDN + 刷新 CDN 缓存
+  → 各机器 app（构建时已烙入 feed 地址）检查 nightly.yml
+  → 用户点「下载」→ 下载 NSIS → 点「安装」→ --updated 原地静默升级 → 自动重启
+```
+
+- feed 地址在**打包时**烙入 `resources/app-update.yml`（electron-builder `publish: generic`），运行时只认该文件。
+- 策略门 `GET <CDN>/api/v0/check_client_update` 是七牛上的**静态 JSON**（`code:0` 无强更）；
+  返回 200 而非 401，故 test 部署的飞书登录流永远不会触发（`authentication` 为 production 的 anonymous）。
+
+## 薄层内容（上游同步后须核对/恢复这 4 处）
+
+| # | 文件 | 内容 | 冲突恢复标记 |
+|---|------|------|--------------|
+| 1 | `scripts/electron-builder-config.mjs` | ~L76：`DSH_DESKTOP_UNSIGNED_UPDATE_FEED=1` 时 unsigned 构建烙入 feed | grep `DSH_DESKTOP_UNSIGNED_UPDATE_FEED` |
+| 2 | `scripts/desktop-auto-update-environment.mjs` | `resolveDesktopAutoUpdateConfig` 内 production origin 可被 `DOWNLOAD_PROD_ORIGIN` 覆盖 | grep `DOWNLOAD_PROD_ORIGIN` |
+| 3 | `.github/workflows/build-desktop-exe-win-x64-unsigned.yml` | settings 加 3 行（FEED=1 / 两个 origin 指向 `$CDN_HOST`）+ `Publish update feed to Qiniu` step | grep `publish-qiniu` |
+| 4 | `scripts/publish-qiniu.mjs` | 版本双校验 → sha512/size → 生成 nightly.yml → 上传 4 对象 → CDN refresh | fork 新增文件，上游不会删 |
+
+补丁 1/2 均为**加法式**小改（env 门控 + 可选覆盖），不改变上游默认行为：
+不设 `DSH_DESKTOP_UNSIGNED_UPDATE_FEED` 的构建行为与上游一致；
+不设 `DOWNLOAD_PROD_ORIGIN` 时 production 仍指向 `download.deepseek.com`。
+
+## 同步后核对清单
+
+1. 上表 3 个 grep 标记仍在；缺失即按标记处重新应用（补丁极小）。
+2. 触发一次构建验证整链：
+   - GH 的 `Publish update feed to Qiniu` step 成功；
+   - `https://<CDN_HOST>/dsh-desk/feeds/win-x64/nightly.yml` 返回 200 且版本 = 构建版本；
+   - 装新 NSIS 后 `resources\app-update.yml` 存在且 `url` 指向自家 CDN。
+3. 若上游改了 `electron-builder-config.mjs` 的结构（不只是加行），人工比对重放补丁 1/2 的**语义**（不是文本）。
+
+## GH Secrets（repo 设置）
+
+| Secret | 含义 |
+|--------|------|
+| `ACCESS_KEY` / `SECRET_KEY` | 七牛 AK/SK（需 Kodo 上传 + CDN 刷新权限） |
+| `BUCKET_NAME` | Kodo 桶名，**必须公有读** |
+| `CDN_HOST` | 加速域名的**纯域名**（如 `updates.example.com`），HTTPS 已启用 |
+
+桶不在华东时，给 publish step 的 env 加 `QINIU_ZONE: z1|z2|na0`（默认 z0）。
+
+## 七牛对象布局
+
+```
+<CDN_HOST>/
+├── dsh-desk/feeds/win-x64/nightly.yml              版本清单（electron-updater generic 格式，绝对 URL）
+├── dsh-desk/bin/win-x64/deepseek-harness-<ver>-win-x64.exe          NSIS 安装包
+├── dsh-desk/bin/win-x64/deepseek-harness-<ver>-win-x64.exe.blockmap 差分块映射（electron-builder 生成时）
+└── api/v0/check_client_update                       策略门静态 JSON
+```
+
+强制全机更新：把 `api/v0/check_client_update` 覆盖为
+`{"code":40005,"data":{"show_content":{"title":"需要更新","detail":"…"},"desktop_app_link":"https://<CDN_HOST>/…"}}`
+（`desktop_app_link` 必须在构建时 `allowedPageOrigins` 内，即自家域）。
+
+## 验证记录
+
+- 2026-07-21：本地探针通过（feed origin 覆盖、policy anonymous、无覆盖时回归原域名、nightly.yml 合法 YAML、`createElectronBuilderConfig` 输出 publish 配置正确）；首次构建验证待上游合并新版本后进行。

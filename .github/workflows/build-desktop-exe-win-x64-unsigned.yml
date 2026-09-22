@@ -77,22 +77,49 @@ jobs:
       # authentication "feishu-test" into app.asar, and on launch the shell
       # opens a blocking modal ("登录测试环境") that blurs and freezes the
       # main window until Feishu SSO succeeds — which a local unsigned build
-      # can never do. "production" is anonymous, and the prod policy endpoint
-      # returns 404 (no force) for unlisted bundles, so no dialog appears.
+      # can never do. "production" is anonymous, so no dialog appears.
+      #
+      # Update channel (this fork): DSH_DESKTOP_UNSIGNED_UPDATE_FEED=1 bakes the
+      # generic electron-updater feed into unsigned builds, DOWNLOAD_PROD_ORIGIN
+      # overrides the fixed production feed origin, and the mandatory policy
+      # origin points at the same Qiniu CDN host, which serves the static
+      # api/v0/check_client_update object (200, no force) — never a 401, so the
+      # test-auth Feishu login flow stays dormant.
       - name: Local unsigned release settings
         shell: pwsh
+        env:
+          CDN_HOST: ${{ secrets.CDN_HOST }}
         run: |
           $settings = @(
             'DSH_DESKTOP_APP_ID=com.deepseek.harness',
             'DSH_DESKTOP_AUTO_UPDATE_ENV=production',
+            'DSH_DESKTOP_UNSIGNED_UPDATE_FEED=1',
+            "DOWNLOAD_PROD_ORIGIN=https://${env:CDN_HOST}",
             'DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://harness-test.deepseek.com',
-            'DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN=https://harness.deepseek.com'
+            "DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN=https://${env:CDN_HOST}"
           )
           Set-Content -LiteralPath 'apps/desktop/.env.windows' -Value $settings -Encoding utf8
 
       - name: Package unsigned Windows installer
         shell: pwsh
         run: pnpm run package:desktop:win:x64:unsigned
+
+      - name: Publish update feed to Qiniu
+        shell: pwsh
+        env:
+          QINIU_ACCESS_KEY: ${{ secrets.ACCESS_KEY }}
+          QINIU_SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          QINIU_BUCKET: ${{ secrets.BUCKET_NAME }}
+          QINIU_CDN_HOST: ${{ secrets.CDN_HOST }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $work = Join-Path $env:RUNNER_TEMP 'qiniu-publisher'
+          New-Item -ItemType Directory -Force $work | Out-Null
+          Set-Location $work
+          npm install --no-audit --no-fund qiniu
+          node (Join-Path $env:GITHUB_WORKSPACE 'apps\desktop\scripts\publish-qiniu.mjs') `
+            (Join-Path $env:GITHUB_WORKSPACE 'apps\desktop\.desktop-build\targets\win-x64\unsigned-artifacts') `
+            $work
 
       - name: Show artifacts
         shell: pwsh

@@ -131,12 +131,17 @@ export function resolveDesktopAutoUpdateConfig(env, platform, arch) {
   const environment = resolveDesktopAutoUpdateEnvironment(env)
   const target = resolveDesktopAutoUpdateTarget(platform, arch)
   const deployment = UPDATE_ENVIRONMENTS[environment]
-  let origin = deployment.fixedOrigin
+  const prodOverride = environment === 'production' ? env.DOWNLOAD_PROD_ORIGIN?.trim() : undefined
+  const hasOverride = prodOverride !== undefined && prodOverride !== ''
+  let origin = hasOverride ? prodOverride : deployment.fixedOrigin
+  let originName = hasOverride ? 'DOWNLOAD_PROD_ORIGIN' : 'deployment origin'
   if (origin === undefined) {
     const { originEnvName } = deployment
     if (originEnvName === undefined) throw new Error('desktop auto-update: selected deployment has no origin')
-    origin = httpsOrigin(requiredEnvironmentValue(env, originEnvName), originEnvName)
+    origin = requiredEnvironmentValue(env, originEnvName)
+    originName = originEnvName
   }
+  origin = httpsOrigin(origin, originName)
   const keyPrefix = `dsh-desk/feeds/${target}`
   return {
     environment,
