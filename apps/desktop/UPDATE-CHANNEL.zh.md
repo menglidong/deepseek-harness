@@ -17,7 +17,7 @@
 - 策略门 `GET <CDN>/api/v0/check_client_update` 是七牛上的**静态 JSON**（`code:0` 无强更）；
   返回 200 而非 401，故 test 部署的飞书登录流永远不会触发（`authentication` 为 production 的 anonymous）。
 
-## 薄层内容（上游同步后须核对/恢复这 5 处）
+## 薄层内容（上游同步后须核对/恢复这 6 处）
 
 | # | 文件 | 内容 | 冲突恢复标记 |
 |---|------|------|--------------|
@@ -26,6 +26,7 @@
 | 3 | `scripts/desktop-auto-update-environment.mjs` | `resolveDesktopAutoUpdateConfig` 内 production origin 可被 `DOWNLOAD_PROD_ORIGIN` 覆盖（白名单本就预置该变量名，补丁只是让代码读它） | grep `DOWNLOAD_PROD_ORIGIN` |
 | 4 | `.github/workflows/build-desktop-exe-win-x64-unsigned.yml` | settings 加 3 行（FEED=1 / 两个 origin 指向 `$CDN_HOST`）+ `Publish update feed to Qiniu` step | grep `publish-qiniu` |
 | 5 | `scripts/publish-qiniu.mjs` | 版本双校验 → sha512/size → 生成 nightly.yml → 上传 4 对象（**不做 CDN 刷新**，用户决策 2026-09-22） | fork 新增文件，上游不会删 |
+| 6 | `src/main.ts` | `dsh-app://` 协议处理补 `shell` host 分支（服务 `renderer/` 目录）——缺失时更新对话框页 404 → 透明覆盖层变隐形模态框卡死整个应用 | grep `hostname === 'shell'` |
 
 补丁 1/2 均为**加法式**小改（env 门控 + 可选覆盖），不改变上游默认行为：
 不设 `DSH_DESKTOP_UNSIGNED_UPDATE_FEED` 的构建行为与上游一致；
@@ -75,3 +76,4 @@
 - 2026-09-22：四建 35757644091 打包通过，发布 step 上传 293MB 后报 `incorrect region, please use up-z2.qiniup.com`——桶在 z2（华南）。publish step 固定 `QINIU_ZONE: z2`。
 - 2026-09-22：五建 35761516420 **全链成功**（30 分钟）：4 对象上传（exe 307MB / blockmap / nightly.yml / 策略 JSON）+ CDN 刷新 200（配额 500/天）。AK 同时具备 Kodo 上传与 CDN 刷新权限，链路验证完毕。
 - 2026-09-22（晚）：按用户决策**移除 CDN 刷新**（只上传）；同一发现域名 `qiniu.mldong.com` **尚未激活**——DNSPod 侧 CNAME 已配（→ qiniu.mldong.com.qiniudns.com），但 qiniudns.com 无 A 记录（AliDNS DoH 交叉验证 Status=3）。影响：直连下载与 App 内检查更新暂时不可达（检查静默降级，属预期行为），等七牛域名激活（证书签发/状态置为已生效）后自动恢复，无需重传。
+- 2026-09-22（夜）：域名随后激活（CNAME 更新为 `qiniu-mldong-com-idvs1mw.qiniudns.com` 新目标，全链解析到 120.226.20.41，直连下载恢复）。用户报告**新构建**点「检查更新」模糊卡住（与早期登录冻结同款表象）。根因：`dsh-app://` 协议只服务 `app` host，`shell` host（更新对话框页 `update-dialog.html`）404 → 透明覆盖层无任何内容 + 主窗口 blur = 隐形模态框永久拦截输入。修：`src/main.ts` 协议处理加 `shell` 分支（`serveWebDocument` 服务 `renderer/`），本地测试 html/js/mandatory 均 200 + 缺失/穿越 404。因版本号不变（0.1.6-alpha.2），各机器需**手动重装**新构建（应用内不会提示同版本更新）。
