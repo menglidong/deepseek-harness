@@ -176,14 +176,28 @@ await writeFile(policyPath, `${POLICY_BODY}\n`)
 
 const mac = new qiniu.auth.digest.Mac(accessKey, secretKey)
 const conf = new qiniu.conf.Config({ useHttpsDomain: true, zone: qiniu.zone[zoneConst] })
-const uploader = new qiniu.form_up.FormUploader(conf)
+const formUploader = new qiniu.form_up.FormUploader(conf)
+// Installers (~300MB) uploaded from an overseas runner to Qiniu: a single form POST
+// times out at 600s. Use the resumable chunked uploader (4MB chunks, resumes past
+// stalls) for large objects and keep the plain form upload for small ones.
+const resumeUploader = new qiniu.resume_up.ResumeUploader(conf)
+const RESUMABLE_THRESHOLD = 32 * 1024 * 1024
 
 async function putObject(key, localFile, mimeType) {
   const policy = new qiniu.rs.PutPolicy({ scope: `${bucket}:${key}`, expires: 3600 })
   const token = policy.uploadToken(mac)
-  const extra = new qiniu.form_up.PutExtra()
-  extra.mimeType = mimeType
-  const result = await uploader.putFile(token, key, localFile, extra)
+  const size = (await stat(localFile)).size
+  let result
+  if (size >= RESUMABLE_THRESHOLD) {
+    const extra = new qiniu.resume_up.PutExtra()
+    extra.mimeType = mimeType
+    console.log(`publish-qiniu: resumable upload ${key} (${size} bytes)`)
+    result = await resumeUploader.putFile(token, key, localFile, extra)
+  } else {
+    const extra = new qiniu.form_up.PutExtra()
+    extra.mimeType = mimeType
+    result = await formUploader.putFile(token, key, localFile, extra)
+  }
   const status = result?.resp?.statusCode
   if (status === undefined || status >= 400) {
     fail(`upload ${key} failed: HTTP ${status} ${JSON.stringify(result?.data ?? result)}`)

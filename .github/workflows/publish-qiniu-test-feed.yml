@@ -60,7 +60,7 @@ jobs:
     name: fresh-key installer upload
     if: inputs.upload_test_binary == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       QINIU_ACCESS_KEY: ${{ secrets.ACCESS_KEY }}
       QINIU_SECRET_KEY: ${{ secrets.SECRET_KEY }}
