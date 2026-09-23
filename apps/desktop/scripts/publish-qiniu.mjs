@@ -120,7 +120,7 @@ if (feedOnly) {
     fail(`QINIU_FEED_VERSION does not look like a version: "${override}"`)
   }
   exeSha512 = env.QINIU_FEED_SHA512?.trim()
-  if (!/^[A-Za-z0-9+/]{87}=$/.test(exeSha512 ?? '')) {
+  if (!/^[A-Za-z0-9+/]{86}==$/.test(exeSha512 ?? '')) {
     fail('QINIU_FEED_SHA512 must be the 88-character base64 SHA-512 of the binary the full publish already uploaded')
   }
   exeSize = Number(env.QINIU_FEED_SIZE?.trim())

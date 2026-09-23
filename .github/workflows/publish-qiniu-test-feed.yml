@@ -145,7 +145,10 @@ jobs:
       QINIU_FEED_VERSION: ${{ inputs.feed_version }}
       QINIU_FEED_SHA512: ${{ inputs.feed_sha512 }}
       QINIU_FEED_SIZE: ${{ inputs.feed_size }}
-      QINIU_FEED_URL_KEY_NAME: ${{ inputs.upload_test_binary == 'true' && inputs.test_binary_name || '' }}
+      # Decoupled from upload_test_binary on purpose: after the binary already sits under the
+      # fresh key, a follow-up feed-only dispatch (upload_test_binary=false) can still point the
+      # feed at it. Empty = standard key (honest feed).
+      QINIU_FEED_URL_KEY_NAME: ${{ inputs.test_binary_name }}
     steps:
       - uses: actions/checkout@v6
         with:
