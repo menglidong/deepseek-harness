@@ -127,21 +127,45 @@
   !endif
   System::Call '$PLUGINSDIR\window-frame.dll::InstallerFindProcess(w "$INSTDIR\${APP_EXECUTABLE_FILENAME}") i.R0 ?c'
   ${If} $R0 == 0
-    ${If} ${isUpdated}
+    ${If} ${Silent}
+      ; Silent in-app update: electron-updater spawns this installer and only
+      ; then quits the application, so its processes are still releasing the
+      ; executable here. Wait for them instead of aborting - under /S the
+      ; message box in the interactive branch is auto-dismissed, which would
+      ; silently cancel the update and leave the application dead and stale.
       StrCpy $R1 0
       ${DoWhile} $R0 == 0
         Sleep 250
         System::Call '$PLUGINSDIR\window-frame.dll::InstallerFindProcess(w "$INSTDIR\${APP_EXECUTABLE_FILENAME}") i.R0 ?c'
+        ${If} $R0 < 0
+          ${ExitDo}
+        ${EndIf}
         IntOp $R1 $R1 + 1
-        ${If} $R1 >= 40
+        ${If} $R1 >= 80
           ${ExitDo}
         ${EndIf}
       ${Loop}
-    ${EndIf}
-    ${If} $R0 == 0
-      MessageBox MB_OK|MB_ICONINFORMATION "$(INSTALLER_RUNNING)" /SD IDOK
-      SetErrorLevel 2
-      Quit
+      ${If} $R0 <= 0
+        SetErrorLevel 2
+        Quit
+      ${EndIf}
+    ${Else}
+      ${If} ${isUpdated}
+        StrCpy $R1 0
+        ${DoWhile} $R0 == 0
+          Sleep 250
+          System::Call '$PLUGINSDIR\window-frame.dll::InstallerFindProcess(w "$INSTDIR\${APP_EXECUTABLE_FILENAME}") i.R0 ?c'
+          IntOp $R1 $R1 + 1
+          ${If} $R1 >= 40
+            ${ExitDo}
+          ${EndIf}
+        ${Loop}
+      ${EndIf}
+      ${If} $R0 == 0
+        MessageBox MB_OK|MB_ICONINFORMATION "$(INSTALLER_RUNNING)" /SD IDOK
+        SetErrorLevel 2
+        Quit
+      ${EndIf}
     ${EndIf}
   ${EndIf}
   ${If} $R0 < 0
