@@ -110,11 +110,18 @@ jobs:
         run: |
           set -e
           # The script looks for <QINIU_BIN_NAME>.exe; the artifact ships the original name.
-          src="$(ls "$WORK"/deepseek-harness-*.exe 2>/dev/null | head -n1 || true)"
-          if [ -z "$src" ]; then echo "::error::no deepseek-harness-*.exe found in the artifact"; exit 1; fi
-          echo "renaming $(basename "$src") -> $QINIU_BIN_NAME.exe"
-          mv "$src" "$WORK/$QINIU_BIN_NAME.exe"
-          if [ -f "$src.blockmap" ]; then mv "$src.blockmap" "$WORK/$QINIU_BIN_NAME.blockmap"; fi
+          # Extraction layout varies (flat vs wrapper dir), so locate the installer recursively.
+          echo "--- $WORK layout:"
+          ls -laR "$WORK" | head -80
+          src="$(find "$WORK" -maxdepth 4 -name 'deepseek-harness-*.exe' -type f 2>/dev/null | head -n1)"
+          if [ -z "$src" ]; then echo "::error::no deepseek-harness-*.exe found under $WORK"; exit 1; fi
+          adir="$(dirname "$src")"
+          bname="$(basename "$src")"
+          echo "installer found: $src (dir: $adir)"
+          if [ "$adir" != "$WORK" ]; then cp -a "$adir/." "$WORK/"; adir="$WORK"; fi
+          echo "renaming $bname -> $QINIU_BIN_NAME.exe"
+          mv "$adir/$bname" "$WORK/$QINIU_BIN_NAME.exe"
+          if [ -f "$adir/$bname.blockmap" ]; then mv "$adir/$bname.blockmap" "$WORK/$QINIU_BIN_NAME.blockmap"; fi
           mod="$(mktemp -d)"
           cd "$mod"
           npm install --no-audit --no-fund qiniu@7.15.2
