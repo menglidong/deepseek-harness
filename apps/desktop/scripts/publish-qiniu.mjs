@@ -148,7 +148,7 @@ if (feedUrlOverride) {
   if (!feedOnly) fail('QINIU_FEED_URL_OVERRIDE is only honored in QINIU_UPLOAD_SCOPE=feed')
 } else if (feedUrlKeyName) {
   if (!feedOnly) fail('QINIU_FEED_URL_KEY_NAME is only honored in QINIU_UPLOAD_SCOPE=feed')
-  if (!/^[a-z0-9][a-z0-9-]*$/i.test(feedUrlKeyName)) fail(`QINIU_FEED_URL_KEY_NAME must be a plain key base name; got "${feedUrlKeyName}"`)
+  if (!/^[a-z0-9][a-z0-9.-]*$/i.test(feedUrlKeyName)) fail(`QINIU_FEED_URL_KEY_NAME must be a plain key base name (letters, digits, dots, dashes); got "${feedUrlKeyName}"`)
 }
 const exeUrl = feedOnly && (feedUrlOverride || feedUrlKeyName)
   ? feedUrlOverride ?? `https://${host}/${BIN_PREFIX}/${feedUrlKeyName}-win-x64.exe`
