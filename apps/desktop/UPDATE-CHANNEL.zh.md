@@ -25,7 +25,7 @@
 | 2 | `scripts/desktop-package-environment.mjs` | `.env.windows` 白名单 `SHARED_SETTING` / `AMBIENT_RELEASE_SETTING` 含 `UNSIGNED_UPDATE_FEED`（缺失会报 "unsupported setting"） | grep `UNSIGNED_UPDATE_FEED` |
 | 3 | `scripts/desktop-auto-update-environment.mjs` | `resolveDesktopAutoUpdateConfig` 内 production origin 可被 `DOWNLOAD_PROD_ORIGIN` 覆盖（白名单本就预置该变量名，补丁只是让代码读它） | grep `DOWNLOAD_PROD_ORIGIN` |
 | 4 | `.github/workflows/build-desktop-exe-win-x64-unsigned.yml` | settings 加 3 行（FEED=1 / 两个 origin 指向 `$CDN_HOST`）+ `Publish update feed to Qiniu` step | grep `publish-qiniu` |
-| 5 | `scripts/publish-qiniu.mjs` | 版本双校验 → sha512/size → 生成 nightly.yml → 上传 4 对象 → CDN refresh | fork 新增文件，上游不会删 |
+| 5 | `scripts/publish-qiniu.mjs` | 版本双校验 → sha512/size → 生成 nightly.yml → 上传 4 对象（**不做 CDN 刷新**，用户决策 2026-09-22） | fork 新增文件，上游不会删 |
 
 补丁 1/2 均为**加法式**小改（env 门控 + 可选覆盖），不改变上游默认行为：
 不设 `DSH_DESKTOP_UNSIGNED_UPDATE_FEED` 的构建行为与上游一致；
@@ -50,6 +50,8 @@
 
 本桶在**华南（z2）**：publish step 已固定 `QINIU_ZONE: z2`（由 Qiniu "incorrect region, please use up-z2.qiniup.com" 报错确定）。迁移桶后如需改 zone，改这一行即可（可选值 z0|z1|z2|na0|as0）。
 
+**CDN 刷新：不做**（用户决策 2026-09-22，脚本只上传）。代价：清单/策略是**同 key 覆盖**上传，边缘缓存未过期前客户端可能短暂看到旧清单。如需即时生效，改在七牛控制台「CDN → HTTP 响应头规则」给 `/dsh-desk/feeds/*` 与 `/api/v0/*` 配 `Cache-Control: no-store`（一次性配置，脚本零参与）。
+
 ## 七牛对象布局
 
 ```
@@ -71,3 +73,5 @@
 - 2026-09-22：二建 35754348542 在 policy origin 校验失败——`CDN_HOST` secret 值带 scheme/路径，拼出的不是纯 HTTPS origin。全链加归一化（workflow 两个 step + `scripts/qiniu-host.mjs`：自动剥离 scheme/尾斜杠，路径仍明确报错），归一化用例探针全绿。
 - 2026-09-22：三建 35755102344 打包通过（17 分钟），发布 step 死于 import 笔误（`createRequire` 属 `node:module`）；修后本地冒烟至上传边界全绿（假密钥被七牛 `401 bad token` 拒，证明链路通）。
 - 2026-09-22：四建 35757644091 打包通过，发布 step 上传 293MB 后报 `incorrect region, please use up-z2.qiniup.com`——桶在 z2（华南）。publish step 固定 `QINIU_ZONE: z2`。
+- 2026-09-22：五建 35761516420 **全链成功**（30 分钟）：4 对象上传（exe 307MB / blockmap / nightly.yml / 策略 JSON）+ CDN 刷新 200（配额 500/天）。AK 同时具备 Kodo 上传与 CDN 刷新权限，链路验证完毕。
+- 2026-09-22（晚）：按用户决策**移除 CDN 刷新**（只上传）；同一发现域名 `qiniu.mldong.com` **尚未激活**——DNSPod 侧 CNAME 已配（→ qiniu.mldong.com.qiniudns.com），但 qiniudns.com 无 A 记录（AliDNS DoH 交叉验证 Status=3）。影响：直连下载与 App 内检查更新暂时不可达（检查静默降级，属预期行为），等七牛域名激活（证书签发/状态置为已生效）后自动恢复，无需重传。

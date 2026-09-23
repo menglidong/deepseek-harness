@@ -7,8 +7,9 @@
  *   dsh-desk/feeds/win-x64/nightly.yml                                 channel metadata (absolute URLs)
  *   api/v0/check_client_update                                         mandatory-update policy (static, no force)
  *
- * After the uploads, the feed and policy URLs are refreshed at the CDN edge so clients see the new
- * metadata immediately (same-key overwrites would otherwise be served from cache).
+ * No CDN refresh is performed (operator decision, 2026-09-22: upload only). If a same-key overwrite
+ * of the feed or policy must be visible at the edge immediately, add a Cache-Control: no-store
+ * response-header rule for /dsh-desk/feeds/* and /api/v0/* in the Qiniu console instead.
  *
  * Environment: QINIU_ACCESS_KEY, QINIU_SECRET_KEY, QINIU_BUCKET, QINIU_CDN_HOST (bare https host),
  * optional QINIU_ZONE (z0|z1|z2|na0|as0, default z0).
@@ -123,18 +124,5 @@ await putObject(`${BIN_PREFIX}/${exeName}`, exePath, 'application/vnd.microsoft.
 if (blockmapExists) await putObject(`${BIN_PREFIX}/${exeName}.blockmap`, blockmapPath, 'application/octet-stream')
 await putObject(FEED_KEY, ymlPath, 'application/yaml')
 await putObject(POLICY_KEY, policyPath, 'application/json')
-
-// Refresh the edge cache for the mutable metadata so the same-key overwrite is visible immediately.
-const refreshed = [
-  `https://${host}/${FEED_KEY}`,
-  `https://${host}/${POLICY_KEY}`,
-  ...(blockmapExists ? [`https://${host}/${BIN_PREFIX}/${exeName}.blockmap`] : []),
-]
-await new Promise((resolve, reject) => {
-  new qiniu.cdn.CdnManager(mac).refreshUrls(refreshed, (error, body) => (error ? reject(error) : resolve(body)))
-}).then(
-  (body) => console.log(`publish-qiniu: CDN refresh accepted (${JSON.stringify(body ?? {})})`),
-  (error) => fail(`CDN refresh failed: ${error instanceof Error ? error.message : String(error)}`),
-)
 
 console.log(`publish-qiniu: done; feed https://${host}/${FEED_KEY}`)
