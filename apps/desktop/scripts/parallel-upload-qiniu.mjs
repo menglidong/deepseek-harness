@@ -38,7 +38,8 @@ const UP_HOSTS = {
 }
 
 function urlsafeB64(str) {
-  return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  // Identical to the SDK's util.urlsafeBase64Encode: replace URL-unsafe chars, KEEP padding.
+  return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_')
 }
 
 function backoffMs(attempt) {
@@ -131,8 +132,10 @@ export async function parallelPut({
     const workers = Array.from({ length: Math.min(concurrency, total) }, () => worker())
     await Promise.all(workers)
 
-    // assemble
-    const mkfileUrl = `${upDomain}/mkfile/${size}/${urlsafeB64(key)}/${urlsafeB64(mimeType)}`
+    // assemble — the SDK's mkfile URL shape: literal "/key/" and "/mimeType/" segments.
+    // Without them the service treats the encoded key as a literal object name and
+    // rejects the assembly with 403 "key doesn't match with scope".
+    const mkfileUrl = `${upDomain}/mkfile/${size}/key/${urlsafeB64(key)}/mimeType/${urlsafeB64(mimeType)}`
     let mk
     for (let attempt = 0; ; attempt++) {
       if (attempt > 0) await new Promise(r => setTimeout(r, backoffMs(attempt - 1)))
