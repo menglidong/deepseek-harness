@@ -69,7 +69,9 @@ jobs:
       # The bucket lives in zone z2 (South China).
       QINIU_ZONE: z2
       QINIU_UPLOAD_SCOPE: bin
-      QINIU_BIN_NAME: ${{ inputs.test_binary_name }}
+      # Must produce the same object key the feed job's URL computes
+      # (QINIU_FEED_URL_KEY_NAME = test_binary_name gets '-win-x64.exe' appended in the script).
+      QINIU_BIN_NAME: ${{ inputs.upload_test_binary == 'true' && format('{0}-win-x64', inputs.test_binary_name) || '' }}
       # gh run download needs an explicit token inside Actions (gh exits 4 without it).
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -106,6 +108,13 @@ jobs:
       - name: Upload installer + blockmap under the fresh key
         shell: bash
         run: |
+          set -e
+          # The script looks for <QINIU_BIN_NAME>.exe; the artifact ships the original name.
+          src="$(ls "$WORK"/deepseek-harness-*.exe 2>/dev/null | head -n1 || true)"
+          if [ -z "$src" ]; then echo "::error::no deepseek-harness-*.exe found in the artifact"; exit 1; fi
+          echo "renaming $(basename "$src") -> $QINIU_BIN_NAME.exe"
+          mv "$src" "$WORK/$QINIU_BIN_NAME.exe"
+          if [ -f "$src.blockmap" ]; then mv "$src.blockmap" "$WORK/$QINIU_BIN_NAME.blockmap"; fi
           mod="$(mktemp -d)"
           cd "$mod"
           npm install --no-audit --no-fund qiniu@7.15.2
