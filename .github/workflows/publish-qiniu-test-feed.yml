@@ -1,0 +1,71 @@
+# Publish (or restore) the Qiniu update feed WITHOUT building — update-channel qualification.
+#
+# Sequence:
+#   1) Run the normal "Build desktop exe (win-x64 unsigned)" workflow: it uploads the binaries
+#      and the honest feed (package version).
+#   2) Trigger THIS workflow with feed_version set to a HIGHER version to make installed older
+#      apps offer the update (full in-app download + NSIS install qualification).
+#   3) Trigger it again with feed_version EMPTY to restore the honest feed.
+#
+# feed_sha512 / feed_size must describe the binary the full publish already uploaded;
+# copy both from that run's log line "publish-qiniu: <exe> size=… sha512=…".
+name: Publish Qiniu test feed (qualification)
+
+on:
+  workflow_dispatch:
+    inputs:
+      feed_version:
+        description: 'Version written into nightly.yml; EMPTY restores the package version (honest feed)'
+        required: false
+        default: ''
+      feed_sha512:
+        description: 'Base64 SHA-512 of the binary currently on the CDN (build run log)'
+        required: true
+      feed_size:
+        description: 'Byte size of the binary currently on the CDN (build run log)'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DSH_TELEMETRY_DISABLED: '1'
+
+jobs:
+  publish:
+    name: feed objects only
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      QINIU_ACCESS_KEY: ${{ secrets.ACCESS_KEY }}
+      QINIU_SECRET_KEY: ${{ secrets.SECRET_KEY }}
+      QINIU_BUCKET: ${{ secrets.BUCKET_NAME }}
+      QINIU_CDN_HOST: ${{ secrets.CDN_HOST }}
+      # The bucket lives in zone z2 (South China).
+      QINIU_ZONE: z2
+      QINIU_UPLOAD_SCOPE: feed
+      QINIU_FEED_VERSION: ${{ inputs.feed_version }}
+      QINIU_FEED_SHA512: ${{ inputs.feed_sha512 }}
+      QINIU_FEED_SIZE: ${{ inputs.feed_size }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          clean: true
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Publish feed + policy objects
+        shell: bash
+        run: |
+          work="$(mktemp -d)"
+          cd "$work"
+          npm install --no-audit --no-fund qiniu@7.15.2
+          node "$GITHUB_WORKSPACE/apps/desktop/scripts/publish-qiniu.mjs" - "$work"

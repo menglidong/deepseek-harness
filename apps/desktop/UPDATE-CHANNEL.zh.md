@@ -8,7 +8,7 @@
 
 ```
 上游合并新版本 → GH Actions 构建（unsigned NSIS）
-  → publish-qiniu.mjs 发布 4 个对象到七牛 CDN + 刷新 CDN 缓存
+  → publish-qiniu.mjs 发布 4 个对象到七牛 CDN（不刷新缓存）
   → 各机器 app（构建时已烙入 feed 地址）检查 nightly.yml
   → 用户点「下载」→ 下载 NSIS → 点「安装」→ --updated 原地静默升级 → 自动重启
 ```
@@ -25,7 +25,7 @@
 | 2 | `scripts/desktop-package-environment.mjs` | `.env.windows` 白名单 `SHARED_SETTING` / `AMBIENT_RELEASE_SETTING` 含 `UNSIGNED_UPDATE_FEED`（缺失会报 "unsupported setting"） | grep `UNSIGNED_UPDATE_FEED` |
 | 3 | `scripts/desktop-auto-update-environment.mjs` | `resolveDesktopAutoUpdateConfig` 内 production origin 可被 `DOWNLOAD_PROD_ORIGIN` 覆盖（白名单本就预置该变量名，补丁只是让代码读它） | grep `DOWNLOAD_PROD_ORIGIN` |
 | 4 | `.github/workflows/build-desktop-exe-win-x64-unsigned.yml` | settings 加 3 行（FEED=1 / 两个 origin 指向 `$CDN_HOST`）+ `Publish update feed to Qiniu` step | grep `publish-qiniu` |
-| 5 | `scripts/publish-qiniu.mjs` | 版本双校验 → sha512/size → 生成 nightly.yml → 上传 4 对象（**不做 CDN 刷新**，用户决策 2026-09-22） | fork 新增文件，上游不会删 |
+| 5 | `scripts/publish-qiniu.mjs`（+ `.github/workflows/publish-qiniu-test-feed.yml`） | 版本双校验 → sha512/size → 生成 nightly.yml → 上传 4 对象（**不做 CDN 刷新**，用户决策 2026-09-22）；**验收模式** `QINIU_UPLOAD_SCOPE=feed` 只传 yml+policy（`QINIU_FEED_VERSION` 覆盖版本用于测试升级，留空恢复诚实 feed；`QINIU_FEED_SHA512/SIZE` 传已上传二进制的哈希），配独立 workflow 手动触发（2026-09-23 起） | fork 新增文件，上游不会删 |
 | 6 | `src/main.ts` | `dsh-app://` 协议处理补 `shell` host 分支（服务 `renderer/` 目录）——缺失时更新对话框页 404 → 透明覆盖层变隐形模态框卡死整个应用 | grep `hostname === 'shell'` |
 
 补丁 1/2 均为**加法式**小改（env 门控 + 可选覆盖），不改变上游默认行为：
@@ -45,7 +45,7 @@
 
 | Secret | 含义 |
 |--------|------|
-| `ACCESS_KEY` / `SECRET_KEY` | 七牛 AK/SK（需 Kodo 上传 + CDN 刷新权限） |
+| `ACCESS_KEY` / `SECRET_KEY` | 七牛 AK/SK（需 Kodo 上传权限；CDN 刷新已弃用） |
 | `BUCKET_NAME` | Kodo 桶名，**必须公有读** |
 | `CDN_HOST` | 加速域名（如 `updates.example.com`），HTTPS 已启用。纯域名最佳；误带 `https://` 前缀或尾部斜杠会自动剥离；**不要带路径**（会被拒绝） |
 
@@ -77,3 +77,4 @@
 - 2026-09-22：五建 35761516420 **全链成功**（30 分钟）：4 对象上传（exe 307MB / blockmap / nightly.yml / 策略 JSON）+ CDN 刷新 200（配额 500/天）。AK 同时具备 Kodo 上传与 CDN 刷新权限，链路验证完毕。
 - 2026-09-22（晚）：按用户决策**移除 CDN 刷新**（只上传）；同一发现域名 `qiniu.mldong.com` **尚未激活**——DNSPod 侧 CNAME 已配（→ qiniu.mldong.com.qiniudns.com），但 qiniudns.com 无 A 记录（AliDNS DoH 交叉验证 Status=3）。影响：直连下载与 App 内检查更新暂时不可达（检查静默降级，属预期行为），等七牛域名激活（证书签发/状态置为已生效）后自动恢复，无需重传。
 - 2026-09-22（夜）：域名随后激活（CNAME 更新为 `qiniu-mldong-com-idvs1mw.qiniudns.com` 新目标，全链解析到 120.226.20.41，直连下载恢复）。用户报告**新构建**点「检查更新」模糊卡住（与早期登录冻结同款表象）。根因：`dsh-app://` 协议只服务 `app` host，`shell` host（更新对话框页 `update-dialog.html`）404 → 透明覆盖层无任何内容 + 主窗口 blur = 隐形模态框永久拦截输入。修：`src/main.ts` 协议处理加 `shell` 分支（`serveWebDocument` 服务 `renderer/`），本地测试 html/js/mandatory 均 200 + 缺失/穿越 404。因版本号不变（0.1.6-alpha.2），各机器需**手动重装**新构建（应用内不会提示同版本更新）。
+- 2026-09-23（晨）：六建 35809257297 = shell 协议修复版（`2f3d47c`）。本地全链验收 `pnpm test:updates:local` 17/17 场景绿（真实 coordinator/对话框/强制窗口/下载进度/哈希/ENOSPC 恢复；CI 绿而实弹卡死的原因：测试 fixture 自注册 `dsh-app` 协议服务 shell 页，从不覆盖 main.ts 的真实协议路径）。新增测试 feed 机制：`publish-qiniu.mjs` 验收模式（`QINIU_UPLOAD_SCOPE=feed` + `QINIU_FEED_VERSION` 覆盖/留空恢复 + `QINIU_FEED_SHA512/SIZE`）+ 独立 workflow `publish-qiniu-test-feed.yml`（只传 yml+policy，约 1 分钟），用于无新构建时演练应用内完整升级（伪造更高版本 → 下载 → NSIS --updated 原地升级 → 重启）。

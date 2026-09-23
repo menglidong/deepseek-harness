@@ -14,7 +14,14 @@
  * Environment: QINIU_ACCESS_KEY, QINIU_SECRET_KEY, QINIU_BUCKET, QINIU_CDN_HOST (bare https host),
  * optional QINIU_ZONE (z0|z1|z2|na0|as0, default z0).
  *
- * Usage: node publish-qiniu.mjs <unsigned-artifacts-dir> <node-modules-dir-with-qiniu>
+ * Qualification mode (no binaries uploaded; the objects a prior full publish left in place are
+ * assumed correct): QINIU_UPLOAD_SCOPE=feed uploads only nightly.yml + the policy object.
+ * The yml version may be overridden with QINIU_FEED_VERSION (empty = package version, i.e.
+ * restore the honest feed after a test). QINIU_FEED_SHA512 (base64) and QINIU_FEED_SIZE (bytes)
+ * must describe the binary that the full publish already uploaded. In this mode the first
+ * positional argument may be `-` (artifacts are not read).
+ *
+ * Usage: node publish-qiniu.mjs <unsigned-artifacts-dir|-> <node-modules-dir-with-qiniu>
  */
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
@@ -56,7 +63,13 @@ if (zoneConst === undefined) fail(`QINIU_ZONE must be one of ${Object.keys(ZONES
 const artifactsDir = process.argv[2]
 const qiniuModuleDir = process.argv[3]
 if (artifactsDir === undefined || qiniuModuleDir === undefined) {
-  fail('usage: node publish-qiniu.mjs <unsigned-artifacts-dir> <node-modules-dir-with-qiniu>')
+  fail('usage: node publish-qiniu.mjs <unsigned-artifacts-dir|-> <node-modules-dir-with-qiniu>')
+}
+const uploadScope = (env.QINIU_UPLOAD_SCOPE?.trim() || 'all').toLowerCase()
+if (uploadScope !== 'all' && uploadScope !== 'feed') fail(`QINIU_UPLOAD_SCOPE must be "all" or "feed"; got "${env.QINIU_UPLOAD_SCOPE}"`)
+const feedOnly = uploadScope === 'feed'
+if (feedOnly && artifactsDir === '-') {
+  console.log('publish-qiniu: qualification mode — feed + policy objects only, no binaries')
 }
 // Resolve the qiniu SDK from the workflow-provisioned module dir; the repo tree is left untouched.
 const requireQiniu = createRequire(join(qiniuModuleDir, 'noop.js'))
@@ -69,33 +82,58 @@ if (dshVersion !== desktopVersion) {
 }
 
 const exeName = `deepseek-harness-${dshVersion}-win-x64.exe`
-const exePath = join(artifactsDir, exeName)
-const exeStat = await stat(exePath).catch(() => undefined)
-if (exeStat === undefined || exeStat.size === 0) fail(`missing or empty artifact ${exePath}`)
-const blockmapPath = join(artifactsDir, `${exeName}.blockmap`)
-const blockmapExists = (await stat(blockmapPath).catch(() => undefined))?.isFile() ?? false
 
 async function sha512Base64File(path) {
   const hash = createHash('sha512')
   for await (const chunk of createReadStream(path)) hash.update(chunk)
   return hash.digest('base64')
 }
-const exeSha512 = await sha512Base64File(exePath)
-console.log(`publish-qiniu: ${exeName} size=${exeStat.size} sha512=${exeSha512.slice(0, 16)}…`)
+
+let exeSha512
+let exeSize
+let blockmapExists = false
+let ymlVersion = dshVersion
+let exePath
+let blockmapPath
+if (feedOnly) {
+  const override = env.QINIU_FEED_VERSION?.trim()
+  ymlVersion = override === '' ? dshVersion : override
+  if (override !== '' && !/^\d+\.\d+\.\d+([-.][\w.]+)?$/.test(ymlVersion)) {
+    fail(`QINIU_FEED_VERSION does not look like a version: "${override}"`)
+  }
+  exeSha512 = env.QINIU_FEED_SHA512?.trim()
+  if (!/^[A-Za-z0-9+/]{87}=$/.test(exeSha512 ?? '')) {
+    fail('QINIU_FEED_SHA512 must be the 88-character base64 SHA-512 of the binary the full publish already uploaded')
+  }
+  exeSize = Number(env.QINIU_FEED_SIZE?.trim())
+  if (!Number.isSafeInteger(exeSize) || exeSize <= 0) fail('QINIU_FEED_SIZE must be a positive integer byte count')
+  if (ymlVersion !== dshVersion) {
+    console.log(`publish-qiniu: WARNING — writing TEST feed version ${ymlVersion} (package version is ${dshVersion}); restore with an empty QINIU_FEED_VERSION`)
+  }
+} else {
+  exePath = join(artifactsDir, exeName)
+  const exeStat = await stat(exePath).catch(() => undefined)
+  if (exeStat === undefined || exeStat.size === 0) fail(`missing or empty artifact ${exePath}`)
+  blockmapPath = join(artifactsDir, `${exeName}.blockmap`)
+  blockmapExists = (await stat(blockmapPath).catch(() => undefined))?.isFile() ?? false
+  exeSha512 = await sha512Base64File(exePath)
+  exeSize = exeStat.size
+  console.log(`publish-qiniu: ${exeName} size=${exeSize} sha512=${exeSha512.slice(0, 16)}…`)
+}
 
 const exeUrl = `https://${host}/${BIN_PREFIX}/${exeName}`
 const yml = [
-  `version: ${dshVersion}`,
+  `version: ${ymlVersion}`,
   'files:',
   `  - url: ${exeUrl}`,
-  `    size: ${exeStat.size}`,
+  `    size: ${exeSize}`,
   `    sha512: ${exeSha512}`,
   `path: ${exeUrl}`,
   `sha512: ${exeSha512}`,
   `releaseDate: ${new Date().toISOString()}`,
   '',
 ].join('\n')
-console.log(`publish-qiniu: nightly.yml for ${dshVersion}:\n${yml}`)
+console.log(`publish-qiniu: nightly.yml for ${ymlVersion}:\n${yml}`)
 
 const work = await mkdtemp(join(tmpdir(), 'dsh-publish-qiniu-'))
 const ymlPath = join(work, 'nightly.yml')
@@ -120,8 +158,10 @@ async function putObject(key, localFile, mimeType) {
   console.log(`publish-qiniu: uploaded ${key}`)
 }
 
-await putObject(`${BIN_PREFIX}/${exeName}`, exePath, 'application/vnd.microsoft.portable-executable')
-if (blockmapExists) await putObject(`${BIN_PREFIX}/${exeName}.blockmap`, blockmapPath, 'application/octet-stream')
+if (!feedOnly) {
+  await putObject(`${BIN_PREFIX}/${exeName}`, exePath, 'application/vnd.microsoft.portable-executable')
+  if (blockmapExists) await putObject(`${BIN_PREFIX}/${exeName}.blockmap`, blockmapPath, 'application/octet-stream')
+}
 await putObject(FEED_KEY, ymlPath, 'application/yaml')
 await putObject(POLICY_KEY, policyPath, 'application/json')
 
