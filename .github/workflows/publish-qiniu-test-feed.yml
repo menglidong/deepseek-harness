@@ -60,7 +60,9 @@ jobs:
     name: fresh-key installer upload
     if: inputs.upload_test_binary == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # The overseas runner -> Qiniu z2 link can crawl below 0.5MB/s; the resumable
+    # upload still makes steady progress, so allow plenty of wall time.
+    timeout-minutes: 180
     env:
       QINIU_ACCESS_KEY: ${{ secrets.ACCESS_KEY }}
       QINIU_SECRET_KEY: ${{ secrets.SECRET_KEY }}
