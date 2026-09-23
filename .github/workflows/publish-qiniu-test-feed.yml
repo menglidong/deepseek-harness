@@ -3,12 +3,17 @@
 # Sequence:
 #   1) Run the normal "Build desktop exe (win-x64 unsigned)" workflow: it uploads the binaries
 #      and the honest feed (package version).
-#   2) Trigger THIS workflow with feed_version set to a HIGHER version to make installed older
-#      apps offer the update (full in-app download + NSIS install qualification).
-#   3) Trigger it again with feed_version EMPTY to restore the honest feed.
+#   2) To qualify a full in-app update (download + NSIS install + restart) without a new build:
+#      trigger THIS workflow with upload_test_binary=true + artifact_run_id (the build run):
+#      the installer is re-uploaded under a FRESH key (custom name) — a new CDN key is never a
+#      stale edge-cache hit — and the feed is written with the overridden version pointing at
+#      that key. Installed older apps then offer the "update".
+#   3) Trigger it again with feed_version EMPTY and upload_test_binary=false to restore the
+#      honest feed (package version, standard key).
 #
-# feed_sha512 / feed_size must describe the binary the full publish already uploaded;
-# copy both from that run's log line "publish-qiniu: <exe> size=… sha512=…".
+# feed_sha512 / feed_size must describe the binary the feed points at;
+# copy both from the build run's log line "publish-qiniu: <exe> size=… sha512=…"
+# (or read them from the then-current nightly.yml on the CDN).
 name: Publish Qiniu test feed (qualification)
 
 on:
@@ -19,14 +24,29 @@ on:
         required: false
         default: ''
       feed_sha512:
-        description: 'Base64 SHA-512 of the binary currently on the CDN (build run log)'
+        description: 'Base64 SHA-512 of the binary the feed points at (build run log / current nightly.yml)'
         required: true
       feed_size:
-        description: 'Byte size of the binary currently on the CDN (build run log)'
+        description: 'Byte size of the binary the feed points at'
         required: true
+      upload_test_binary:
+        description: 'Also re-upload the build installer under a fresh key (needed for a full in-app update test)'
+        type: choice
+        required: false
+        default: 'false'
+        options: ['false', 'true']
+      artifact_run_id:
+        description: 'GitHub run id of the build whose artifact provides the installer (required when upload_test_binary=true)'
+        required: false
+        default: ''
+      test_binary_name:
+        description: 'Key base name for the fresh binary object, without .exe (e.g. deepseek-harness-0.1.6-alpha.2-fixed)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -36,10 +56,11 @@ env:
   DSH_TELEMETRY_DISABLED: '1'
 
 jobs:
-  publish:
-    name: feed objects only
+  upload-binary:
+    name: fresh-key installer upload
+    if: inputs.upload_test_binary == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 40
     env:
       QINIU_ACCESS_KEY: ${{ secrets.ACCESS_KEY }}
       QINIU_SECRET_KEY: ${{ secrets.SECRET_KEY }}
@@ -47,10 +68,64 @@ jobs:
       QINIU_CDN_HOST: ${{ secrets.CDN_HOST }}
       # The bucket lives in zone z2 (South China).
       QINIU_ZONE: z2
+      QINIU_UPLOAD_SCOPE: bin
+      QINIU_BIN_NAME: ${{ inputs.test_binary_name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          clean: true
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Check inputs
+        shell: bash
+        run: |
+          if [ -z "${{ inputs.artifact_run_id }}" ]; then
+            echo "::error::artifact_run_id is required when upload_test_binary=true"
+            exit 1
+          fi
+          if [ -z "${{ inputs.test_binary_name }}" ]; then
+            echo "::error::test_binary_name is required when upload_test_binary=true"
+            exit 1
+          fi
+
+      - name: Download build artifact
+        shell: bash
+        run: |
+          work="$(mktemp -d)"
+          gh run download "${{ inputs.artifact_run_id }}" \
+            -n deepseek-harness-windows-x64-unsigned -D "$work"
+          echo "work=$work" >> "$GITHUB_ENV"
+
+      - name: Upload installer + blockmap under the fresh key
+        shell: bash
+        run: |
+          mod="$(mktemp -d)"
+          cd "$mod"
+          npm install --no-audit --no-fund qiniu@7.15.2
+          node "$GITHUB_WORKSPACE/apps/desktop/scripts/publish-qiniu.mjs" "$WORK" "$mod"
+
+  publish-feed:
+    name: feed objects only
+    needs: upload-binary
+    if: always() && !(needs.upload-binary.result == 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      QINIU_ACCESS_KEY: ${{ secrets.ACCESS_KEY }}
+      QINIU_SECRET_KEY: ${{ secrets.SECRET_KEY }}
+      QINIU_BUCKET: ${{ secrets.BUCKET_NAME }}
+      QINIU_CDN_HOST: ${{ secrets.CDN_HOST }}
+      QINIU_ZONE: z2
       QINIU_UPLOAD_SCOPE: feed
       QINIU_FEED_VERSION: ${{ inputs.feed_version }}
       QINIU_FEED_SHA512: ${{ inputs.feed_sha512 }}
       QINIU_FEED_SIZE: ${{ inputs.feed_size }}
+      QINIU_FEED_URL_KEY_NAME: ${{ inputs.upload_test_binary == 'true' && inputs.test_binary_name || '' }}
     steps:
       - uses: actions/checkout@v6
         with:

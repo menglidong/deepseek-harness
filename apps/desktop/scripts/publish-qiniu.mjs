@@ -14,12 +14,18 @@
  * Environment: QINIU_ACCESS_KEY, QINIU_SECRET_KEY, QINIU_BUCKET, QINIU_CDN_HOST (bare https host),
  * optional QINIU_ZONE (z0|z1|z2|na0|as0, default z0).
  *
- * Qualification mode (no binaries uploaded; the objects a prior full publish left in place are
- * assumed correct): QINIU_UPLOAD_SCOPE=feed uploads only nightly.yml + the policy object.
- * The yml version may be overridden with QINIU_FEED_VERSION (empty = package version, i.e.
- * restore the honest feed after a test). QINIU_FEED_SHA512 (base64) and QINIU_FEED_SIZE (bytes)
- * must describe the binary that the full publish already uploaded. In this mode the first
- * positional argument may be `-` (artifacts are not read).
+ * Qualification modes (the objects a prior full publish left in place are assumed correct
+ * unless explicitly re-uploaded):
+ *   QINIU_UPLOAD_SCOPE=feed  — upload only nightly.yml + the policy object.
+ *     The yml version may be overridden with QINIU_FEED_VERSION (empty = package version,
+ *     i.e. restore the honest feed after a test). QINIU_FEED_SHA512 (base64) and
+ *     QINIU_FEED_SIZE (bytes) must describe the binary the feed points at. QINIU_FEED_URL_OVERRIDE
+ *     (absolute https URL) may redirect the feed to a differently keyed binary (fresh CDN key =
+ *     no stale edge cache); or QINIU_FEED_URL_KEY_NAME (key base name without .exe) constructs
+ *     the URL under the standard bin prefix of the configured CDN host.
+ *     The first positional argument may be `-` (artifacts are not read).
+ *   QINIU_UPLOAD_SCOPE=bin   — upload only the installer + blockmap, optionally under a custom
+ *     key name (QINIU_BIN_NAME, without .exe) so the object is a fresh CDN key.
  *
  * Usage: node publish-qiniu.mjs <unsigned-artifacts-dir|-> <node-modules-dir-with-qiniu>
  */
@@ -66,10 +72,17 @@ if (artifactsDir === undefined || qiniuModuleDir === undefined) {
   fail('usage: node publish-qiniu.mjs <unsigned-artifacts-dir|-> <node-modules-dir-with-qiniu>')
 }
 const uploadScope = (env.QINIU_UPLOAD_SCOPE?.trim() || 'all').toLowerCase()
-if (uploadScope !== 'all' && uploadScope !== 'feed') fail(`QINIU_UPLOAD_SCOPE must be "all" or "feed"; got "${env.QINIU_UPLOAD_SCOPE}"`)
+if (uploadScope !== 'all' && uploadScope !== 'feed' && uploadScope !== 'bin') {
+  fail(`QINIU_UPLOAD_SCOPE must be "all", "feed", or "bin"; got "${env.QINIU_UPLOAD_SCOPE}"`)
+}
 const feedOnly = uploadScope === 'feed'
+const binOnly = uploadScope === 'bin'
 if (feedOnly && artifactsDir === '-') {
   console.log('publish-qiniu: qualification mode — feed + policy objects only, no binaries')
+}
+if (binOnly) {
+  if (artifactsDir === '-') fail('QINIU_UPLOAD_SCOPE=bin requires the unsigned-artifacts directory (not "-")')
+  console.log('publish-qiniu: qualification mode — binary objects only, no feed')
 }
 // Resolve the qiniu SDK from the workflow-provisioned module dir; the repo tree is left untouched.
 const requireQiniu = createRequire(join(qiniuModuleDir, 'noop.js'))
@@ -81,7 +94,11 @@ if (dshVersion !== desktopVersion) {
   fail(`desktop version ${desktopVersion} does not match dsh version ${dshVersion}; bump both or fix the mismatch`)
 }
 
-const exeName = `deepseek-harness-${dshVersion}-win-x64.exe`
+// bin scope may publish the build under a custom key name (fresh CDN key = never a stale overwrite).
+const binNameBase = binOnly && env.QINIU_BIN_NAME?.trim()
+  ? env.QINIU_BIN_NAME.trim()
+  : `deepseek-harness-${dshVersion}-win-x64`
+const exeName = `${binNameBase}.exe`
 
 async function sha512Base64File(path) {
   const hash = createHash('sha512')
@@ -121,23 +138,39 @@ if (feedOnly) {
   console.log(`publish-qiniu: ${exeName} size=${exeSize} sha512=${exeSha512.slice(0, 16)}…`)
 }
 
-const exeUrl = `https://${host}/${BIN_PREFIX}/${exeName}`
-const yml = [
-  `version: ${ymlVersion}`,
-  'files:',
-  `  - url: ${exeUrl}`,
-  `    size: ${exeSize}`,
-  `    sha512: ${exeSha512}`,
-  `path: ${exeUrl}`,
-  `sha512: ${exeSha512}`,
-  `releaseDate: ${new Date().toISOString()}`,
-  '',
-].join('\n')
-console.log(`publish-qiniu: nightly.yml for ${ymlVersion}:\n${yml}`)
+const feedUrlOverride = env.QINIU_FEED_URL_OVERRIDE?.trim()
+if (feedUrlOverride && !feedUrlOverride.startsWith('https://')) {
+  fail(`QINIU_FEED_URL_OVERRIDE must be an absolute https URL; got "${feedUrlOverride}"`)
+}
+const feedUrlKeyName = env.QINIU_FEED_URL_KEY_NAME?.trim()
+if (feedUrlOverride) {
+  if (!feedOnly) fail('QINIU_FEED_URL_OVERRIDE is only honored in QINIU_UPLOAD_SCOPE=feed')
+} else if (feedUrlKeyName) {
+  if (!feedOnly) fail('QINIU_FEED_URL_KEY_NAME is only honored in QINIU_UPLOAD_SCOPE=feed')
+  if (!/^[a-z0-9][a-z0-9-]*$/i.test(feedUrlKeyName)) fail(`QINIU_FEED_URL_KEY_NAME must be a plain key base name; got "${feedUrlKeyName}"`)
+}
+const exeUrl = feedOnly && (feedUrlOverride || feedUrlKeyName)
+  ? feedUrlOverride ?? `https://${host}/${BIN_PREFIX}/${feedUrlKeyName}-win-x64.exe`
+  : `https://${host}/${BIN_PREFIX}/${exeName}`
 
 const work = await mkdtemp(join(tmpdir(), 'dsh-publish-qiniu-'))
-const ymlPath = join(work, 'nightly.yml')
-await writeFile(ymlPath, yml)
+let ymlPath
+if (!binOnly) {
+  const yml = [
+    `version: ${ymlVersion}`,
+    'files:',
+    `  - url: ${exeUrl}`,
+    `    size: ${exeSize}`,
+    `    sha512: ${exeSha512}`,
+    `path: ${exeUrl}`,
+    `sha512: ${exeSha512}`,
+    `releaseDate: ${new Date().toISOString()}`,
+    '',
+  ].join('\n')
+  console.log(`publish-qiniu: nightly.yml for ${ymlVersion}:\n${yml}`)
+  ymlPath = join(work, 'nightly.yml')
+  await writeFile(ymlPath, yml)
+}
 const policyPath = join(work, 'check_client_update.json')
 await writeFile(policyPath, `${POLICY_BODY}\n`)
 
@@ -162,7 +195,10 @@ if (!feedOnly) {
   await putObject(`${BIN_PREFIX}/${exeName}`, exePath, 'application/vnd.microsoft.portable-executable')
   if (blockmapExists) await putObject(`${BIN_PREFIX}/${exeName}.blockmap`, blockmapPath, 'application/octet-stream')
 }
-await putObject(FEED_KEY, ymlPath, 'application/yaml')
-await putObject(POLICY_KEY, policyPath, 'application/json')
-
-console.log(`publish-qiniu: done; feed https://${host}/${FEED_KEY}`)
+if (!binOnly) {
+  await putObject(FEED_KEY, ymlPath, 'application/yaml')
+  await putObject(POLICY_KEY, policyPath, 'application/json')
+  console.log(`publish-qiniu: done; feed https://${host}/${FEED_KEY}`)
+} else {
+  console.log(`publish-qiniu: done; binary https://${host}/${BIN_PREFIX}/${exeName}`)
+}
