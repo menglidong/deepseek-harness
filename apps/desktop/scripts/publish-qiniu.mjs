@@ -37,6 +37,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { normalizeQiniuCdnHost } from './qiniu-host.mjs'
+import { parallelPut } from './parallel-upload-qiniu.mjs'
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const appRoot = join(scriptDir, '..')
@@ -177,27 +178,39 @@ await writeFile(policyPath, `${POLICY_BODY}\n`)
 const mac = new qiniu.auth.digest.Mac(accessKey, secretKey)
 const conf = new qiniu.conf.Config({ useHttpsDomain: true, zone: qiniu.zone[zoneConst] })
 const formUploader = new qiniu.form_up.FormUploader(conf)
-// Installers (~300MB) uploaded from an overseas runner to Qiniu: a single form POST
-// times out at 600s. Use the resumable chunked uploader (4MB chunks, resumes past
-// stalls) for large objects and keep the plain form upload for small ones.
+// Installers (~300MB) from an overseas runner to Qiniu: a single form POST times out at
+// 600s and the SDK's resumable uploader crawls (sequential 4MB blocks never finished a
+// 60-minute job). Upload large objects with concurrent mkblk/mkfile multipart, falling
+// back to the SDK resumable uploader if that fails.
 const resumeUploader = new qiniu.resume_up.ResumeUploader(conf)
-const RESUMABLE_THRESHOLD = 32 * 1024 * 1024
+const PARALLEL_THRESHOLD = 32 * 1024 * 1024
 
 async function putObject(key, localFile, mimeType) {
   const policy = new qiniu.rs.PutPolicy({ scope: `${bucket}:${key}`, expires: 3600 })
   const token = policy.uploadToken(mac)
   const size = (await stat(localFile)).size
-  let result
-  if (size >= RESUMABLE_THRESHOLD) {
-    const extra = new qiniu.resume_up.PutExtra()
-    extra.mimeType = mimeType
-    console.log(`publish-qiniu: resumable upload ${key} (${size} bytes)`)
-    result = await resumeUploader.putFile(token, key, localFile, extra)
-  } else {
-    const extra = new qiniu.form_up.PutExtra()
-    extra.mimeType = mimeType
-    result = await formUploader.putFile(token, key, localFile, extra)
+  if (size >= PARALLEL_THRESHOLD) {
+    try {
+      console.log(`publish-qiniu: parallel multipart upload ${key} (${size} bytes)`)
+      await parallelPut({ file: localFile, key, bucket, zone: zoneName, mimeType, qiniu, accessKey, secretKey })
+      console.log(`publish-qiniu: uploaded ${key}`)
+      return
+    } catch (err) {
+      console.warn(`publish-qiniu: parallel upload failed (${String(err.message).slice(0, 200)}); falling back to SDK resumable uploader`)
+    }
+    const extraResume = new qiniu.resume_up.PutExtra()
+    extraResume.mimeType = mimeType
+    const resultResume = await resumeUploader.putFile(token, key, localFile, extraResume)
+    const statusResume = resultResume?.resp?.statusCode
+    if (statusResume === undefined || statusResume >= 400) {
+      fail(`upload ${key} failed: HTTP ${statusResume} ${JSON.stringify(resultResume?.data ?? resultResume)}`)
+    }
+    console.log(`publish-qiniu: uploaded ${key}`)
+    return
   }
+  const extra = new qiniu.form_up.PutExtra()
+  extra.mimeType = mimeType
+  const result = await formUploader.putFile(token, key, localFile, extra)
   const status = result?.resp?.statusCode
   if (status === undefined || status >= 400) {
     fail(`upload ${key} failed: HTTP ${status} ${JSON.stringify(result?.data ?? result)}`)
