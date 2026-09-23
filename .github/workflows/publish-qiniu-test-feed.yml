@@ -112,7 +112,7 @@ jobs:
           # The script looks for <QINIU_BIN_NAME>.exe; the artifact ships the original name.
           # (GITHUB_ENV key is lowercase `work` - bash env is case sensitive.)
           echo "--- $work layout:"
-          ls -laR "$work" | head -80
+          (ls -laR "$work" 2>&1 | head -100) || true
           src="$(find "$work" -maxdepth 4 -name 'deepseek-harness-*.exe' -type f 2>/dev/null | head -n1)"
           if [ -z "$src" ]; then echo "::error::no deepseek-harness-*.exe found under $work"; exit 1; fi
           adir="$(dirname "$src")"
