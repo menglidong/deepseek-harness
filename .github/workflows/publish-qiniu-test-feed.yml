@@ -70,6 +70,8 @@ jobs:
       QINIU_ZONE: z2
       QINIU_UPLOAD_SCOPE: bin
       QINIU_BIN_NAME: ${{ inputs.test_binary_name }}
+      # gh run download needs an explicit token inside Actions (gh exits 4 without it).
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v6
         with:
