@@ -7,9 +7,14 @@
  *   dsh-desk/feeds/win-x64/nightly.yml                                 channel metadata (absolute URLs)
  *   api/v0/check_client_update                                         mandatory-update policy (static, no force)
  *
- * No CDN refresh is performed (operator decision, 2026-09-22: upload only). If a same-key overwrite
- * of the feed or policy must be visible at the edge immediately, add a Cache-Control: no-store
- * response-header rule for /dsh-desk/feeds/* and /api/v0/* in the Qiniu console instead.
+ * This script uploads only — it does NOT refresh the CDN edge cache. A same-version republish
+ * overwrites the same object keys, and edges keep serving the OLD cached bytes until refreshed,
+ * which makes electron-updater fail with "sha512 checksum mismatch" (feed says new hash, edge
+ * serves old file). After any same-key overwrite, run the "Refresh Qiniu CDN cache" workflow
+ * (.github/workflows/refresh-qiniu-cdn.yml, Qiniu fusion API /v2/tune/refresh) or
+ * `node apps/desktop/scripts/refresh-qiniu.mjs <urls>` with the QINIU_ACCESS_KEY / QINIU_SECRET_KEY
+ * credentials (policy changed 2026-09-24: API refresh is allowed; original upload-only decision
+ * was 2026-09-22).
  *
  * Environment: QINIU_ACCESS_KEY, QINIU_SECRET_KEY, QINIU_BUCKET, QINIU_CDN_HOST (bare https host),
  * optional QINIU_ZONE (z0|z1|z2|na0|as0, default z0).

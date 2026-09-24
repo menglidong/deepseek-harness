@@ -1,0 +1,66 @@
+# Refresh the Qiniu CDN edge cache for the published desktop update objects.
+#
+# When a same-version republish overwrites the same object keys (e.g. a fixed
+# 0.1.7-rc.1 over a broken 0.1.7-rc.1), edge nodes keep serving the OLD cached
+# bytes while the feed advertises the NEW sha512 — clients then fail with
+# "sha512 checksum mismatch". Dispatch this workflow to force the standard set
+# of URLs (installer, blockmap, feed, policy) to re-fetch from origin. Takes
+# 1-11 minutes (Qiniu refreshes propagate in 5-10 minutes; this workflow
+# polls the task states until they succeed).
+#
+# No build, no upload: it only talks to the Qiniu CDN OpenAPI
+# (https://developer.qiniu.com/fusion/13367/fusion-api-cache-management).
+# Quota: 500 URL refreshes/day on this account (reset at midnight).
+name: Refresh Qiniu CDN cache
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PRIMARY_NODE_VERSION: '24'
+  DSH_TELEMETRY_DISABLED: '1'
+
+jobs:
+  refresh:
+    name: refresh desktop update URLs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          clean: true
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.PRIMARY_NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Refresh CDN cache for the current version
+        env:
+          QINIU_ACCESS_KEY: ${{ secrets.ACCESS_KEY }}
+          QINIU_SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          QINIU_CDN_HOST: ${{ secrets.CDN_HOST }}
+        run: |
+          set -euo pipefail
+          # Tolerate an accidental scheme prefix / trailing slash in the CDN_HOST secret.
+          cdn="${QINIU_CDN_HOST// /}"
+          case "$cdn" in
+            http://*|https://*) cdn="${cdn#*://}";;
+          esac
+          while [ "${cdn%/}" != "$cdn" ]; do cdn="${cdn%/}"; done
+          [ -n "$cdn" ] || { echo "CDN_HOST secret is empty" >&2; exit 1; }
+          version="$(node -p "require('./apps/desktop/package.json').version")"
+          echo "refreshing CDN cache for version $version on $cdn"
+          node apps/desktop/scripts/refresh-qiniu.mjs \
+            "https://$cdn/dsh-desk/bin/win-x64/deepseek-harness-$version-win-x64.exe" \
+            "https://$cdn/dsh-desk/bin/win-x64/deepseek-harness-$version-win-x64.exe.blockmap" \
+            "https://$cdn/dsh-desk/feeds/win-x64/nightly.yml" \
+            "https://$cdn/api/v0/check_client_update"
