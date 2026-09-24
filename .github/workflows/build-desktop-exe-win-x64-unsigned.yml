@@ -151,7 +151,90 @@ jobs:
 
       - name: Package unsigned Windows installer
         shell: pwsh
+        continue-on-error: true
         run: pnpm run package:desktop:win:x64:unsigned
+
+      # Temporary diagnostics for the 0.1.7 packaged-smoke LibreOffice failure:
+      # the same native engine converts fine in plain Node on this runner image
+      # (see the probe step above), but dies inside the packaged runtime with the
+      # worker's catch-all "Unknown LibreOfficeKit exception" (a non-std C++/SEH
+      # crash, see sources/engine/native/worker.cxx). The worker is a child
+      # process, so the only context differences are (A) the engine tree coming
+      # from the pnpm store vs the asar.unpacked unpack and (B) the PATH that
+      # nativeEnvironment passes through (the smoke prepends resources/runtime/bin
+      # to PATH). Run the worker binary directly, three ways:
+      #   P1 store engine + plain env        (control; mirrors the passing CLI probe)
+      #   P2 unpacked engine + plain env     (isolates A: unpack integrity)
+      #   P3 unpacked engine + smoke env     (isolates B: PATH pollution)
+      # then dump the Windows Application log for the worker's crash record
+      # (faulting module names a missing/bad DLL immediately).
+      - name: Diagnose packaged LibreOffice worker (if package failed)
+        if: failure()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $artifacts = Join-Path $env:GITHUB_WORKSPACE 'apps\desktop\.desktop-build\targets\win-x64\unsigned-artifacts'
+          $unpacked = Join-Path $artifacts 'win-unpacked'
+          $unpackedEngine = Join-Path $unpacked 'resources\app.asar.unpacked\dsh\node_modules\@deepseek-ai\libreoffice-kit-win32-x64'
+          $storeEngine = Join-Path (Get-ChildItem (Join-Path $env:GITHUB_WORKSPACE 'node_modules\.pnpm') -Directory -Filter '@deepseek-ai+libreoffice-kit-win32-x64@*' | Sort-Object Name -Descending | Select-Object -First 1).FullName 'node_modules\@deepseek-ai\libreoffice-kit-win32-x64'
+          function TreeStat([string]$dir) {
+            $f = @(Get-ChildItem $dir -Recurse -File -ErrorAction SilentlyContinue)
+            "files=$($f.Count) bytes=$(($f | Measure-Object Length -Sum).Sum)"
+          }
+          "engine store:     $storeEngine :: $(TreeStat $storeEngine)"
+          "engine unpacked:  $unpackedEngine :: $(TreeStat $unpackedEngine)"
+          $probe = Join-Path $env:RUNNER_TEMP 'lo-worker-probe.mjs'
+          $probeScript = @'
+            import { spawn } from 'node:child_process'
+            import { mkdirSync, copyFileSync } from 'node:fs'
+            const [mode, engineDir, workDir, sample, extraBinDir] = process.argv.slice(2)
+            const worker = engineDir + '\\bin\\libreoffice-kit.exe'
+            const program = engineDir + '\\program'
+            const inp = workDir + '\\input.docx'
+            const outp = workDir + '\\out.pdf'
+            const profile = workDir + '\\profile'
+            mkdirSync(profile + '\\user', { recursive: true })
+            copyFileSync(sample, inp)
+            const env = {
+              PATH: process.env.PATH,
+              SystemRoot: process.env.SystemRoot,
+              SYSTEMROOT: process.env.SYSTEMROOT,
+              HOME: profile, USERPROFILE: profile, TMPDIR: profile, TMP: profile, TEMP: profile,
+            }
+            if (mode === 'P3' && extraBinDir) env.PATH = extraBinDir + ';' + env.PATH
+            const child = spawn(worker, [
+              '--program-directory', program, '--input-path', inp, '--output-path', outp,
+              '--profile-directory', profile, '--max-output-bytes', '134217728',
+              '--max-image-resolution', '144', '--format', 'pdf', '--recalculate', 'false',
+            ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env })
+            let stdout = '', stderr = ''
+            child.stdout.on('data', (d) => { stdout += d })
+            child.stderr.on('data', (d) => { stderr += d })
+            child.on('close', (code) => {
+              console.log(`[probe:${mode}] exit=${code}`)
+              console.log(`[probe:${mode}] stdout=${stdout.slice(0, 2000)}`)
+              if (stderr) console.log(`[probe:${mode}] stderr=${stderr.slice(-2000)}`)
+            })
+          '@
+          Set-Content -LiteralPath $probe -Value $probeScript -Encoding utf8
+          $sample = Join-Path $env:GITHUB_WORKSPACE 'packages\bundle\web-app\tests\fixtures\document-conversion.docx'
+          $runtimeBin = Join-Path $unpacked 'resources\runtime\bin'
+          foreach ($pair in @(
+            @{ m = 'P1'; e = $storeEngine;    bin = '' },
+            @{ m = 'P2'; e = $unpackedEngine; bin = '' },
+            @{ m = 'P3'; e = $unpackedEngine; bin = $runtimeBin }
+          )) {
+            $work = Join-Path $env:RUNNER_TEMP ("lo-worker-" + $pair.m)
+            New-Item -ItemType Directory -Force $work | Out-Null
+            node $probe $pair.m $pair.e $work $sample $pair.bin 2>&1
+          }
+          "=== Application log: worker crash records (last 30 min) ==="
+          try {
+            Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-30) } -ErrorAction Stop |
+              Where-Object { $_.Message -match 'libreoffice' } |
+              Select-Object -First 5 | ForEach-Object { $_.Message }
+          } catch { "event log read failed: $_" }
+          exit 1
 
       - name: Publish update feed to Qiniu
         shell: pwsh
