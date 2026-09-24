@@ -236,6 +236,23 @@ jobs:
           } catch { "event log read failed: $_" }
           exit 1
 
+      # Packaging gate: the shell main process must be able to resolve its full static
+      # import graph inside the asar — every bare specifier has to land on a package
+      # present in the asar root node_modules, with a resolvable entry file. 2026-09-24:
+      # upstream 0.1.7 shipped two dependency-declaration bugs (a shell runtime import
+      # declared as devDependency, plus runtime peerDependencies of closure packages
+      # never declared) that made every installed copy crash at startup with
+      # ERR_MODULE_NOT_FOUND — only discoverable on a real machine. This gate catches
+      # that failure class at build time, before anything reaches the CDN.
+      - name: Verify packaged shell closure (asar imports)
+        if: success()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $unpacked = Join-Path $env:GITHUB_WORKSPACE 'apps\desktop\.desktop-build\targets\win-x64\unsigned-artifacts\win-unpacked'
+          if (-not (Test-Path (Join-Path $unpacked 'resources\app.asar'))) { throw "app.asar not found under $unpacked" }
+          node (Join-Path $env:GITHUB_WORKSPACE 'apps\desktop\scripts\verify-asar-closure.mjs') $unpacked
+
       - name: Publish update feed to Qiniu
         shell: pwsh
         env:
