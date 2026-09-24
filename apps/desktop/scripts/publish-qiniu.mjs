@@ -129,14 +129,25 @@ if (feedOnly) {
     console.log(`publish-qiniu: WARNING — writing TEST feed version ${ymlVersion} (package version is ${dshVersion}); restore with an empty QINIU_FEED_VERSION`)
   }
 } else {
-  exePath = join(artifactsDir, exeName)
-  const exeStat = await stat(exePath).catch(() => undefined)
-  if (exeStat === undefined || exeStat.size === 0) fail(`missing or empty artifact ${exePath}`)
-  blockmapPath = join(artifactsDir, `${exeName}.blockmap`)
+  // Since 0.1.7 upstream names the unsigned NSIS installer with an "-unsigned"
+  // suffix locally; the update channel keeps the standard object key (the feed
+  // yml is the single source of truth for the URL, and the blockmap is derived
+  // from that URL by the client).
+  let localExeName = exeName
+  let candidatePath = join(artifactsDir, localExeName)
+  let exeStat = await stat(candidatePath).catch(() => undefined)
+  if (exeStat === undefined || exeStat.size === 0) {
+    localExeName = exeName.replace(/\.exe$/u, '-unsigned.exe')
+    candidatePath = join(artifactsDir, localExeName)
+    exeStat = await stat(candidatePath).catch(() => undefined)
+  }
+  if (exeStat === undefined || exeStat.size === 0) fail(`missing or empty artifact ${candidatePath}`)
+  exePath = candidatePath
+  blockmapPath = join(artifactsDir, `${localExeName}.blockmap`)
   blockmapExists = (await stat(blockmapPath).catch(() => undefined))?.isFile() ?? false
   exeSha512 = await sha512Base64File(exePath)
   exeSize = exeStat.size
-  console.log(`publish-qiniu: ${exeName} size=${exeSize} sha512=${exeSha512.slice(0, 16)}…`)
+  console.log(`publish-qiniu: ${localExeName} (published as ${exeName}) size=${exeSize} sha512=${exeSha512.slice(0, 16)}…`)
 }
 
 const feedUrlOverride = env.QINIU_FEED_URL_OVERRIDE?.trim()
