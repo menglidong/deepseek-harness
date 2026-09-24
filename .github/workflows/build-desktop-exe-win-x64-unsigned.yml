@@ -68,6 +68,16 @@ jobs:
         shell: pwsh
         run: pnpm install --frozen-lockfile
 
+      # The 0.1.7 packaging script imports (transitively, via
+      # macos-notarization-proxy.ts) @deepseek-ai/node-addon-system/lib/flock.js,
+      # a TypeScript build artifact of the native/system workspace. Upstream builds
+      # it before desktop packaging (release.yml runs `pnpm --dir native/system run
+      # build:ts`); without this step the win-x64 package dies at import time with
+      # ERR_MODULE_NOT_FOUND on a clean checkout.
+      - name: Build native system (TypeScript)
+        shell: pwsh
+        run: pnpm --dir native/system run build:ts
+
       # The packaging script reads release settings from this local file and
       # never falls back to ambient values; unsigned packaging only needs the
       # app id and the mandatory-update origins.
