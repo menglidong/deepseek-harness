@@ -78,6 +78,39 @@ jobs:
         shell: pwsh
         run: pnpm --dir native/system run build:ts
 
+      # Fail fast (~1 min) if the bundled LibreOffice engine cannot convert on
+      # this runner image, before the ~15 min packaging step. The packaged
+      # runtime smoke exercises the same native win32 engine; a runner-level
+      # engine failure (fonts/profile context) there surfaced as the opaque
+      # "Unknown LibreOfficeKit exception". A direct CLI probe against the repo's
+      # committed sample docx reproduces it in plain Node, and the diagnostics
+      # below name the suspect on every image change.
+      - name: Probe LibreOffice engine on runner
+        shell: pwsh
+        run: |
+          $probeDir = Join-Path $env:RUNNER_TEMP 'lo-probe'
+          New-Item -ItemType Directory -Force $probeDir | Out-Null
+          $kitDir = Get-ChildItem (Join-Path $env:GITHUB_WORKSPACE 'node_modules\.pnpm') -Directory -Filter '@deepseek-ai+libreoffice-kit@*' |
+            Sort-Object Name -Descending | Select-Object -First 1
+          if ($kitDir -eq $null) { throw 'lo-probe: libreoffice-kit not found in pnpm store' }
+          $cli = Join-Path $kitDir.FullName 'node_modules\@deepseek-ai\libreoffice-kit\lib\cli.js'
+          $sample = Join-Path $env:GITHUB_WORKSPACE 'packages\bundle\web-app\tests\fixtures\document-conversion.docx'
+          $out = Join-Path $probeDir 'probe.pdf'
+          $result = & node $cli convert --input $sample --output $out 2>&1 | Out-String
+          "lo-probe result: $result"
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $out)) {
+            "=== lo-probe diagnostics ==="
+            "whoami: $(whoami)"
+            "USERPROFILE: $env:USERPROFILE"
+            "TEMP: $env:TEMP"
+            "PATH head: $($env:PATH.Split(';')[0..5] -join ' | ')"
+            "fonts: $((Get-ChildItem 'C:\Windows\Fonts' -Include '*.ttf','*.otf' -ErrorAction SilentlyContinue | Measure-Object).Count) ttf/otf files"
+            "defender: $((Get-Service WinDefend -ErrorAction SilentlyContinue).Status)"
+            "kit engine: $(Get-ChildItem (Join-Path $kitDir.FullName 'node_modules\@deepseek-ai') -Directory -Filter 'libreoffice-kit-*' | Select-Object -ExpandProperty Name -Join ', ')"
+            exit 1
+          }
+          "lo-probe: PDF produced $((Get-Item $out).Length) bytes"
+
       # The packaging script reads release settings from this local file and
       # never falls back to ambient values; unsigned packaging only needs the
       # app id and the mandatory-update origins.
